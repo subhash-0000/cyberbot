@@ -1,0 +1,71 @@
+# security_bot/core.py
+import os
+import logging
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from jira import JIRA
+from slack_sdk import WebClient
+import openai
+
+# Load environment variables
+load_dotenv(".env")
+
+app = FastAPI(
+    title="Security Incident Chatbot",
+    description="AI-powered cybersecurity incident management system",
+    version="0.1.0"
+)
+
+class SecurityAlert(BaseModel):
+    source: str
+    raw_message: str
+    timestamp: str
+    metadata: dict = {}
+
+# Database Configuration
+def init_db():
+    return psycopg2.connect(
+        dbname=os.getenv("POSTGRES_DB"),
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+        host=os.getenv("POSTGRES_HOST"),
+        cursor_factory=RealDictCursor
+    )
+
+# AI Service Initialization
+openai.api_key = os.getenv("OPENAI_API_KEY")
+jira = JIRA(
+    server=os.getenv("JIRA_URL"),
+    basic_auth=(os.getenv("JIRA_USER"), os.getenv("JIRA_API_KEY"))
+)
+slack = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
+
+# Core Database Model
+def create_alerts_table():
+    with init_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS security_alerts (
+                    id SERIAL PRIMARY KEY,
+                    source VARCHAR(255) NOT NULL,
+                    raw_message TEXT NOT NULL,
+                    severity VARCHAR(50),
+                    processed BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata JSONB
+                )
+            """)
+            conn.commit()
+
+@app.on_event("startup")
+def startup_db():
+    create_alerts_table()
+    logging.info("Database tables initialized")
+
+# Basic Health Check
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "version": app.version}
